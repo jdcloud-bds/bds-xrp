@@ -29,6 +29,7 @@
 #include <boost/asio.hpp>
 #include <memory>
 #include <mutex>
+#include <ripple/app/ledger/Ledger.h>
 
 namespace ripple {
 

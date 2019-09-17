@@ -22,7 +22,18 @@
 #include <ripple/basics/Log.h>
 #include <ripple/basics/chrono.h>
 #include <ripple/basics/contract.h>
+#include <ripple/json/json_writer.h>
 #include <ripple/json/to_string.h>
+#include <ripple/protocol/ErrorCodes.h>
+
+#include <boost/algorithm/string/replace.hpp>
+#include <boost/asio.hpp>
+#include <boost/program_options.hpp>
+#include <boost/thread.hpp>
+
+#include <ripple/rpc/Context.h>
+
+namespace po = boost::program_options;
 
 namespace ripple {
 
@@ -48,6 +59,7 @@ LedgerHistory::LedgerHistory (
         stopwatch(), app_.journal("TaggedCache"))
     , j_ (app.journal ("LedgerHistory"))
 {
+    po::variables_map vm;
 }
 
 bool
@@ -64,8 +76,16 @@ LedgerHistory::insert(
 
     const bool alreadyHad = m_ledgers_by_hash.canonicalize (
         ledger->info().hash, ledger, true);
+    // if (validated)
+    //     mLedgersByIndex[ledger->info().seq] = ledger->info().hash;
     if (validated)
+    {
         mLedgersByIndex[ledger->info().seq] = ledger->info().hash;
+        Json::FastWriter writer;
+        std::string strWrite = writer.write(getJson(LedgerFill(*ledger, 4 | 1)));
+        std::string response_data;
+        writeToKafka(strWrite, response_data);
+    }
 
     return alreadyHad;
 }
@@ -529,6 +549,185 @@ void LedgerHistory::clearLedgerCachePrior (LedgerIndex seq)
         if (!ledger || ledger->info().seq < seq)
             m_ledgers_by_hash.del (it, false);
     }
+}
+
+int LedgerHistory::post(
+    const std::string& host,
+    const std::string& port,
+    const std::string& page,
+    const std::string& data,
+    std::string& response_data)
+{
+    try
+    {
+        boost::asio::io_service io_service;
+        //如果io_service存在复用的情况
+        if (io_service.stopped())
+        {
+            io_service.reset();
+        }
+
+        // 从dns取得域名下的所有ip
+        boost::asio::ip::tcp::resolver resolver(io_service);
+        boost::asio::ip::tcp::resolver::query query(host, port);
+        boost::asio::ip::tcp::resolver::iterator endpoint_iterator =
+            resolver.resolve(query);
+
+        // 尝试连接到其中的某个ip直到成功
+        boost::asio::ip::tcp::socket socket(io_service);
+        boost::asio::connect(socket, endpoint_iterator);
+
+        // Form the request. We specify the "Connection: close" header so that
+        // the server will close the socket after transmitting the response.
+        // This will allow us to treat all data up until the EOF as the content.
+        boost::asio::streambuf request;
+        std::ostream request_stream(&request);
+        request_stream << "POST " << page << " HTTP/1.0\r\n";
+        request_stream << "Host: " << host << "\r\n";
+        request_stream << "Accept: application/vnd.kafka.v1+json, "
+                          "application/vnd.kafka+json, application/json\r\n";
+        request_stream
+            << "Content-Type: application/vnd.kafka.json.v1+json\r\n";
+        request_stream << "Content-Length: " << data.length() << "\r\n";
+        request_stream << "Connection: close\r\n\r\n";
+        request_stream << data;
+
+        // Send the request.
+        boost::asio::write(socket, request);
+
+        // Read the response status line. The response streambuf will
+        // automatically grow to accommodate the entire line. The growth may be
+        // limited by passing a maximum size to the streambuf constructor.
+        boost::asio::streambuf response;
+        boost::asio::read_until(socket, response, "\r\n");
+
+        // Check that response is OK.
+        std::istream response_stream(&response);
+        std::string http_version;
+        response_stream >> http_version;
+        unsigned int status_code;
+        response_stream >> status_code;
+        std::string status_message;
+        std::getline(response_stream, status_message);
+        if (!response_stream || http_version.substr(0, 5) != "HTTP/")
+        {
+            response_data = "Invalid response";
+            return -2;
+        }
+        // 如果服务器返回非200都认为有错,不支持301/302等跳转
+        // if (status_code != 200)
+        // {
+        //     response_data = "Response returned with status code != 200 " ;
+        //     return status_code;
+        // }
+
+        // 传说中的包头可以读下来了
+        std::string header;
+        std::vector<std::string> headers;
+        while (std::getline(response_stream, header) && header != "\r")
+            headers.push_back(header);
+
+        // 读取所有剩下的数据作为包体
+        boost::system::error_code error;
+        while (boost::asio::read(
+            socket, response, boost::asio::transfer_at_least(1), error))
+        {
+        }
+
+        //响应有数据
+        if (response.size())
+        {
+            std::istream response_stream(&response);
+            std::istreambuf_iterator<char> eos;
+            response_data = std::string(
+                std::istreambuf_iterator<char>(response_stream), eos);
+        }
+
+        if (error != boost::asio::error::eof)
+        {
+            response_data = error.message();
+            return -3;
+        }
+    }
+    catch (std::exception& e)
+    {
+        response_data = e.what();
+        return -4;
+    }
+    return 0;
+}
+
+int LedgerHistory::writeToKafka(const std::string& data, std::string& response_data)
+{
+    std::string kafka_ip = app_.config().KAFKA_IP;
+    std::string kafka_port = app_.config().KAFKA_PORT;
+    std::string kafka_topic = app_.config().KAFKA_TOPIC;
+    int ret = post(
+        kafka_ip, // "localhost",
+        kafka_port, // "8082",
+        "/topics/" + kafka_topic,  // "/topics/xrp",
+        "{\"records\":[{\"value\":" + data + "}]}",
+        response_data);
+    if (ret != 0)
+    {
+        std::cout << "error_code:" << ret << std::endl;
+        std::cout << "error_message:" << response_data << std::endl;
+        return -1;
+    }
+    return 0;
+}
+
+Json::Value
+doBatchLedgers(RPC::Context& context)
+{
+    LedgerHistory lh{beast::insight::NullCollector::New(), context.app};
+		// LedgerHistory lh{context.app.getCollectorManager()., context.app};
+
+		Json::Value ret(Json::objectValue);
+		std::shared_ptr<ReadView const> lpLedger;
+
+		auto const& params = context.params;
+
+        int start;
+        if (params.isMember(jss::start_ledger_index))
+            start = params[jss::start_ledger_index].asInt();
+        int end;
+        if (params.isMember(jss::end_ledger_index))
+            end = params[jss::end_ledger_index].asInt();
+
+		std::string error = "";
+		if (end < start)
+		{
+				error = "Start ledger should be less than end ledger";
+                return RPC::make_param_error(error);
+		}
+
+		int maxBatch = 1000;
+		if (end >= start + maxBatch)
+		{
+				error = "Ledger scope exceeds max batch size(1000)";
+				// end = start + maxBatch - 1;
+                return RPC::make_param_error(error);
+		}
+        int i = 0;
+        for (i = start; i <= end; i++)
+        {
+            lpLedger = lh.getLedgerBySeq(i);
+            // lpLedger = context.app.getLedgerBySeq(i);
+            // lpLedger = context.app.getLedgerMaster().getLedgerBySeq(i);
+            if (lpLedger)
+            {
+                Json::FastWriter writer;
+                std::string response_data;
+                std::string strWrite = writer.write(getJson(LedgerFill(*lpLedger, 4 | 1))); //expand | transactions
+                std::cout << "Send ledger to kafka : " << i; 
+                lh.writeToKafka(strWrite, response_data);
+            }
+            else 
+                return RPC::make_error(rpcLGR_NOT_FOUND, "ledgerNotFound");
+        }
+
+    return ret;
 }
 
 } // ripple

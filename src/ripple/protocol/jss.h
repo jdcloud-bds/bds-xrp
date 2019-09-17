@@ -536,6 +536,9 @@ JSS ( warning );                    // rpc:
 JSS ( workers );
 JSS ( write_load );                 // out: GetCounts
 
+JSS ( start_ledger_index );         // in: BatchLedgers
+JSS ( end_ledger_index );           // in: BatchLedgers
+
 #undef JSS
 
 } // jss

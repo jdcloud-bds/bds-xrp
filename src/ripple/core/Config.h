@@ -137,6 +137,11 @@ public:
 
     std::string                 START_LEDGER;
 
+    // kafka parameters
+    std::string KAFKA_IP;
+    std::string KAFKA_PORT;
+    std::string KAFKA_TOPIC;
+
     // Network parameters
     int const                   TRANSACTION_FEE_BASE = 10;   // The number of fee units a reference transaction costs
 

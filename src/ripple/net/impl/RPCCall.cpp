@@ -153,6 +153,19 @@ private:
 
         return v;
     }
+    // send_batch_ledger 
+    Json::Value parseBatchLedger (Json::Value const& jvParams)
+    {
+        // Parameter count should have already been verified.
+        assert (jvParams.size() == 2);
+        Json::Value jvRequest{Json::objectValue};
+		std::cout << "parseBatchLedger jvparams 0" << jvParams[0u].asString() << "\n";
+		std::cout << "parseBatchLedger jvparams 1" << jvParams[1u].asString() << "\n";
+        jvRequest[jss::start_ledger_index] = jvParams[0u].asInt();
+        jvRequest[jss::end_ledger_index] = jvParams[1u].asInt();
+
+        return jvRequest;
+    }
 
     Json::Value parseDownloadShard(Json::Value const& jvParams)
     {
@@ -1150,6 +1163,9 @@ public:
             {   "path_find",            &RPCParser::parseEvented,              -1, -1   },
             {   "subscribe",            &RPCParser::parseEvented,              -1, -1   },
             {   "unsubscribe",          &RPCParser::parseEvented,              -1, -1   },
+
+            // kafka methods
+            {   "send_batch_ledger",    &RPCParser::parseBatchLedger,           2,  2   },
         };
 
         auto const count = jvParams.size ();

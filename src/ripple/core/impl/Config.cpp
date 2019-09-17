@@ -309,6 +309,14 @@ void Config::loadFromString (std::string const& fileContents)
     }
 
     std::string strTemp;
+    if (getSingleSection(secConfig, SECTION_KAFKA_IP, strTemp, j_))
+        KAFKA_IP = strTemp;
+
+	if (getSingleSection(secConfig, SECTION_KAFKA_PORT, strTemp, j_))
+        KAFKA_PORT = strTemp;
+
+	if (getSingleSection(secConfig, SECTION_KAFKA_TOPIC, strTemp, j_))
+        KAFKA_TOPIC = strTemp;
 
     if (getSingleSection (secConfig, SECTION_PEER_PRIVATE, strTemp, j_))
         PEER_PRIVATE = beast::lexicalCastThrow <bool> (strTemp);

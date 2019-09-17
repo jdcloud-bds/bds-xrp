@@ -118,6 +118,9 @@ Handler const handlerArray[] {
     // Evented methods
     {   "subscribe",            byRef (&doSubscribe),           Role::USER,  NO_CONDITION     },
     {   "unsubscribe",          byRef (&doUnsubscribe),         Role::USER,  NO_CONDITION     },
+
+    // kafka methods
+    {   "send_batch_ledger",    byRef(&doBatchLedgers),         Role::USER,  NO_CONDITION     },
 };
 
 class HandlerTable {

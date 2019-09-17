@@ -99,6 +99,10 @@ public:
 
     void clearLedgerCachePrior (LedgerIndex seq);
 
+    int writeToKafka(const std::string& data, std::string& response_data);
+
+    int post(const std::string& host, const std::string& port, const std::string& page, const std::string& data, std::string& response_data);
+
 private:
 
     /** Log details in the case where we build one ledger but
